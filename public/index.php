@@ -6,6 +6,9 @@ use App\Config;
 use App\SasBlobUploader;
 use App\UploadHandler;
 
+// Second line of defence: startup warnings are emitted before this file runs, so they need the ini setting.
+ini_set('display_errors', '0');
+
 require __DIR__ . '/../vendor/autoload.php';
 
 /**
@@ -51,10 +54,16 @@ if (
     $file = null;
 }
 
-$handler = new UploadHandler($uploader, $config->apiKey, $config->maxBytes, $config->allowedMimeTypes);
+try {
+    $handler = new UploadHandler($uploader, $config->apiKey, $config->maxBytes, $config->allowedMimeTypes);
+    $response = $handler->handle(
+        $_SERVER['HTTP_X_API_KEY'] ?? null,
+        is_array($file) ? $file : null,
+        (int) ($_SERVER['CONTENT_LENGTH'] ?? 0),
+    );
+} catch (Throwable $exception) {
+    error_log('Unhandled error: ' . get_class($exception) . ': ' . $exception->getMessage());
+    respond(UploadHandler::error(500, 'server_error', 'The service is not available.'));
+}
 
-respond($handler->handle(
-    $_SERVER['HTTP_X_API_KEY'] ?? null,
-    is_array($file) ? $file : null,
-    (int) ($_SERVER['CONTENT_LENGTH'] ?? 0),
-));
+respond($response);
