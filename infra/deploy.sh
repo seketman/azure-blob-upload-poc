@@ -13,7 +13,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ENV_FILE="$REPO_ROOT/.env"
 
 case "$SAS_DAYS" in
-  '' | *[!0-9]*) echo "SAS_DAYS must be a positive integer" >&2; exit 1 ;;
+  '' | 0* | *[!0-9]*) echo "SAS_DAYS must be a positive integer" >&2; exit 1 ;;
 esac
 
 for tool in az openssl; do

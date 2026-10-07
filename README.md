@@ -91,9 +91,11 @@ Settings, all optional:
 LOCATION=westeurope SAS_DAYS=7 ./infra/deploy.sh
 ```
 
-Running it again is safe: it renews the policy expiry, issues a new SAS and
-keeps the existing API key. Restart the service afterwards so it reads the new
-SAS.
+Running it again is safe: it extends the expiry of the stored access policy,
+which the SAS inherits, writes the SAS to `.env` again and keeps the existing
+API key. Restart the service afterwards so it reads `.env`. With Docker, use
+`docker compose up -d --force-recreate`; a plain `docker compose restart`
+keeps the old environment.
 
 A new stored access policy can take about 30 seconds to become effective; an
 upload right after the first deployment may fail with `502` until then.
@@ -118,7 +120,8 @@ Engine with the Compose plugin on Linux).
 docker compose up -d --build
 ```
 
-The image already has the PHP upload limits set. Useful commands:
+The image already has the PHP settings from the other options built in.
+Useful commands:
 
 ```sh
 docker compose logs -f     # follow the server log
@@ -139,7 +142,7 @@ Then, from the repository root:
 ```sh
 composer install --no-dev
 set -a; . ./.env; set +a
-php -d upload_max_filesize=10M -d post_max_size=11M -S 127.0.0.1:8080 -t public
+php -d upload_max_filesize=10M -d post_max_size=11M -d display_errors=0 -S 127.0.0.1:8080 -t public
 ```
 
 ### Option C: Linux
@@ -156,7 +159,7 @@ Then, from the repository root:
 ```sh
 composer install --no-dev
 set -a; . ./.env; set +a
-php -d upload_max_filesize=10M -d post_max_size=11M -S 127.0.0.1:8080 -t public
+php -d upload_max_filesize=10M -d post_max_size=11M -d display_errors=0 -S 127.0.0.1:8080 -t public
 ```
 
 On other distributions, install the equivalent packages; `php -m` must list
@@ -193,7 +196,7 @@ To run it **natively in PowerShell**:
        Set-Item -Path "Env:$($name.Trim())" -Value $value.Trim().Trim("'").Trim('"')
    }
 
-   php -d upload_max_filesize=10M -d post_max_size=11M -S 127.0.0.1:8080 -t public
+   php -d upload_max_filesize=10M -d post_max_size=11M -d display_errors=0 -S 127.0.0.1:8080 -t public
    ```
 
 The `Get-Content` block loads `.env` into the current PowerShell session; run
@@ -201,10 +204,14 @@ it again in every new window.
 
 ### About the PHP flags
 
-The two `-d` flags matter: PHP's defaults (2 MB per file) are lower than
-`UPLOAD_MAX_BYTES`, and PHP enforces its own limits before the application
-runs. Keep `post_max_size` slightly above `UPLOAD_MAX_BYTES` to leave room for
-the multipart envelope.
+The three `-d` flags matter. The two size flags are needed because PHP's
+defaults (2 MB per file) are lower than `UPLOAD_MAX_BYTES`, and PHP enforces
+its own limits before the application runs. Keep `post_max_size` slightly
+above `UPLOAD_MAX_BYTES` to leave room for the multipart envelope.
+
+`display_errors=0` keeps PHP warnings out of the response. Without it, a
+request over `post_max_size` is answered with `200` and an HTML warning
+instead of the JSON error. The Docker image sets all three.
 
 `--no-dev` skips PHPUnit, which is only needed to run the [tests](#tests).
 
@@ -258,7 +265,7 @@ Every error has the same shape: `{"error": "<code>", "message": "<text>"}`.
 | 405 | `method_not_allowed` | `/upload` with a method other than `POST` |
 | 413 | `file_too_large` | Larger than `UPLOAD_MAX_BYTES` or than PHP's own limits |
 | 415 | `unsupported_type` | Detected type is not in `UPLOAD_ALLOWED_MIME` |
-| 500 | `server_error` | Missing configuration; details are in the server log only |
+| 500 | `server_error` | Missing configuration or an unexpected error; details are in the server log only |
 | 502 | `storage_error` | Storage rejected the upload; details are in the server log only |
 
 ## Configuration
@@ -278,18 +285,19 @@ Read from environment variables (see [.env.example](.env.example)).
 `text/plain`. Other values have no effect: the service only stores types it
 has a file extension for, and it never stores `text/html` or `image/svg+xml`.
 
-To raise `UPLOAD_MAX_BYTES` above 10 MB, raise the PHP limits with it: the
-`-d` flags in step 2, or the `upload_max_filesize` and `post_max_size` values
-in the `Dockerfile`.
+To raise `UPLOAD_MAX_BYTES` above 10 MB, raise the PHP limits with it: the two
+size `-d` flags in step 2, or the `upload_max_filesize` and `post_max_size`
+values in the `Dockerfile`.
 
 ## Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
 | `401 unauthorized` although the key is set | The key reached the server empty. Check that `.env` is loaded in the shell running `curl`. With the Docker command, `no configuration file provided: not found` means it was run outside the repository directory, and `service "app" is not running` means the container is stopped: run `docker compose up -d`. |
-| `413 file_too_large`, or `400 missing_file` with the file attached, for a file under 10 MB | The server was started without the `-d upload_max_filesize` and `-d post_max_size` flags, so PHP's defaults apply: 2 MB per file and 8 MB per request. A file over 2 MB gets the `413`; a request over 8 MB is discarded whole and gets the `400`. |
+| `413 file_too_large`, or `400 missing_file` with the file attached, for a file under 10 MB | The server was started without the `-d upload_max_filesize` and `-d post_max_size` flags, so PHP's defaults apply: 2 MB per file and 8 MB per request. A file over 2 MB gets the `413`; a request over 8 MB is discarded whole and gets the `400`, or the `413` if its total size also exceeds `UPLOAD_MAX_BYTES`. |
+| `200` with an HTML `Warning` before the JSON | The server was started without `-d display_errors=0`. |
 | `415 unsupported_type` | The type is detected from the file's bytes, not from its name. Only the types in `UPLOAD_ALLOWED_MIME` are accepted. |
-| `500 server_error` | A required variable is missing or invalid. The server log names the storage variables and `UPLOAD_MAX_BYTES`. If the log is silent, `UPLOAD_API_KEY` is empty or not set. |
+| `500 server_error` | A required variable is missing or invalid. The server log names the storage variables and `UPLOAD_MAX_BYTES`. If the log is silent, `UPLOAD_API_KEY` is empty or not set. An `Unhandled error` line means an unexpected failure rather than configuration. |
 | `502 storage_error` right after the first deployment | The access policy is not effective yet. Wait 30 seconds and retry. |
 | `502 storage_error` later on | The server log has the Azure error code. `AuthenticationFailed` usually means the SAS expired: re-run `./infra/deploy.sh` and restart the service. |
 | `502` on Windows with `cURL error 60` in the log | PHP has no CA bundle. Download [cacert.pem](https://curl.se/docs/caextract.html) and set `curl.cainfo` to its full path in `php.ini`. |
@@ -343,8 +351,10 @@ valid.
 - The container allows reading a blob by URL, not listing the container.
 - The upload credential is a SAS limited to one container and to creating new
   blobs: it cannot overwrite, read, list or delete. To revoke it, delete the
-  stored access policy (or re-run `deploy.sh` under a new `POLICY_NAME`); the
-  account key does not need to be rotated.
+  stored access policy (`az storage container policy delete`); the account key
+  does not need to be rotated. Re-running `deploy.sh` under a new
+  `POLICY_NAME` creates a second policy and leaves the first one, and any SAS
+  issued from it, valid.
 - The SAS stays on the server. It is never sent to the client and never
   written to logs or error messages.
 - The endpoint requires an API key so it cannot be used as an open upload
@@ -352,8 +362,9 @@ valid.
   replacement for real authentication. Serve it over HTTPS outside localhost.
 - The content type is detected from the file's bytes. The client's file name
   and declared type are ignored, and blob names are generated on the server.
-- HTML and SVG are always refused, so the storage domain never serves active
-  content.
+- The service always refuses HTML and SVG. Storage does not enforce this: the
+  SAS can create a blob of any type, so a leaked SAS could put active content
+  on the storage domain. Treat the SAS as a secret.
 - PHP receives and buffers the request body before the API key is checked, so
   unauthenticated clients can still send bodies up to `post_max_size`. Keep
   that limit close to `UPLOAD_MAX_BYTES`, and put a rate limit or reverse-proxy
