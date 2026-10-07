@@ -1,0 +1,7 @@
+services:
+  app:
+    build: .
+    env_file: .env
+    ports:
+      # Bound to localhost only: the API key is the sole protection.
+      - "127.0.0.1:8080:8080"

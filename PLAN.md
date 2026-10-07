@@ -1,6 +1,8 @@
 # Plan: public file upload to Azure Blob Storage from PHP
 
-Status: **draft for review** — nothing is provisioned or implemented yet.
+Status: **implemented** — the code and infrastructure templates are in this
+repository (see [README.md](README.md)). Azure resources are created on demand
+with `infra/deploy.sh`.
 
 ## 1. Goal
 
@@ -46,7 +48,11 @@ holds private data (logs, application files, a static website).
 
 Provisioning is delivered as code (`infra/main.bicep` plus a short deploy
 script), so the environment is reproducible and removable with
-`az group delete`.
+`az group delete` (`infra/destroy.sh`).
+
+The stored access policy is created by `infra/deploy.sh`, not by the Bicep
+template: it is a data-plane object (part of the container ACL) that ARM
+templates cannot declare.
 
 ## 4. How the PHP app authenticates to Storage
 
@@ -79,13 +85,14 @@ overwrite, read, list or delete existing ones.
 
 Steps:
 
-1. Reject requests without a valid API key header (the endpoint must not be an
-   open upload relay).
+1. Reject requests without a valid API key in the `X-Api-Key` header (the
+   endpoint must not be an open upload relay).
 2. Validate the upload: PHP upload error code, maximum size, and MIME type
    detected from the content (`finfo`), checked against an allowlist.
 3. Generate the blob name on the server: `<yyyy>/<mm>/<uuid>.<ext>`. The
    client's file name is never used in the path.
-4. `PUT` the content with the detected `Content-Type` (`x-ms-blob-content-type`).
+4. `PUT` the content with the detected `Content-Type` (`x-ms-blob-content-type`)
+   and `If-None-Match: *`, so an existing blob is never overwritten.
 5. Return the URL.
 
 Response `201 Created`:
@@ -101,6 +108,9 @@ Response `201 Created`:
 
 Errors: `400` invalid or missing file, `401` missing/invalid API key,
 `413` too large, `415` type not allowed, `502` Storage rejected the upload.
+Also `404` for other paths, `405` for other methods on `/upload`, and `500`
+when the server is missing configuration. Error bodies are
+`{"error": "<code>", "message": "<text>"}`.
 
 ### Configuration (environment variables)
 
@@ -117,14 +127,16 @@ Errors: `400` invalid or missing file, `401` missing/invalid API key,
 
 ```
 infra/
-  main.bicep          storage account, container, access policy
-  deploy.sh           az deployment + SAS generation
+  main.bicep          storage account, container
+  deploy.sh           az deployment + access policy + SAS generation
+  destroy.sh          deletes the resource group
 public/
   index.php           front controller, routes POST /upload
 src/
   UploadHandler.php   validation and response
   BlobUploader.php    interface
   SasBlobUploader.php Put Blob over cURL
+  Config.php          environment variables
 tests/
 .env.example
 README.md

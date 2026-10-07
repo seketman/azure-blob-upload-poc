@@ -1,0 +1,7 @@
+.git
+.env
+.env.*
+vendor/
+tests/
+infra/
+.phpunit*
